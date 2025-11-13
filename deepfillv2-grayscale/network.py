@@ -63,11 +63,9 @@ class GrayInpaintingNet(nn.Module):
         self.up4 = GatedConv2d(opt.latent_channels, opt.out_channels, 7, 1, 3, pad_type = opt.pad, activation = 'sigmoid', norm = 'none')
         
     def forward(self, img, mask):
-        # img: entire img
-        # mask: 1 for mask region; 0 for unmask region
-        # 1 - mask: unmask
-        # img * (1 - mask): ground truth unmask region
-        masked_img = img * (1 - mask) + mask                            # in: batch * 1 * 256 * 256
+        # img: corrupted input where occluded region is already zeroed
+        # mask: 1 for occluded region; 0 for valid region
+        masked_img = img * (1 - mask)                                   # maintain known region only
         fusion = torch.cat((masked_img, mask), 1)                       # in: batch * 2 * 256 * 256
         # network forward part
         out = self.down1(fusion)                                        # out: batch * 64 * 256 * 256

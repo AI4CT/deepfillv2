@@ -5,8 +5,8 @@ python train.py \
 --checkpoint_interval 5 \
 --finetune_path './models/GrayInpainting_epoch10_batchsize16.pth' \
 --multi_gpu True \
---epochs 31 \
---batch_size 8 \
+--epochs 500 \
+--batch_size 4 \
 --lr_g 1e-4 \
 --lambda_l1 1 \
 --lambda_perceptual 5 \
@@ -14,7 +14,7 @@ python train.py \
 --lr_decrease_epoch 10 \
 --lr_decrease_factor 0.5 \
 --num_workers 8 \
---imgsize 256 \
+--imgsize 128 \
 --mask_type 'free_form' \
 --margin 10 \
 --mask_num 20 \
@@ -22,3 +22,4 @@ python train.py \
 --max_angle 4 \
 --max_len 40 \
 --max_width 2 \
+--gan_param 0.01 \

@@ -44,7 +44,7 @@ if __name__ == "__main__":
     parser.add_argument('--saveroot', type = str, \
         default = "./results", \
             help = 'the saving folder')
-    parser.add_argument('--imgsize', type = int, default = 256, help = 'size of image')
+    parser.add_argument('--imgsize', type = int, default = 128, help = 'size of image')
     opt = parser.parse_args()
     print(opt)
 

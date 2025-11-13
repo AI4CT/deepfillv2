@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import numpy as np
 import cv2
 import torch
@@ -17,7 +18,7 @@ def create_generator(opt):
     print('Generator is created!')
     # Init the networks
     if opt.finetune_path:
-        pretrained_net = torch.load(opt.finetune_path)
+        pretrained_net = torch.load(opt.finetune_path, weights_only=True)
         generator = load_dict(generator, pretrained_net)
         print('Load generator with %s' % opt.finetune_path)
     else:
@@ -36,7 +37,7 @@ def create_discriminator(opt):
 
 def create_perceptualnet():
     # Pre-trained VGG-16
-    vgg16 = torch.load('vgg16_pretrained.pth')
+    vgg16 = torch.load('/home/yubd/mount/codebase/deepfillv2/deepfillv2-grayscale/models/vgg16-397923af.pth', weights_only=True)
     # Get the first 16 layers of vgg16, which is conv3_3
     perceptualnet = network.PerceptualNet()
     # Update the parameters
@@ -112,24 +113,63 @@ def check_path(path):
 #    Validation and Sample at training
 # ----------------------------------------
 def sample(grayscale, mask, out, save_folder, epoch):
-    # to cpu
-    grayscale = grayscale[0, :, :, :].data.cpu().numpy().transpose(1, 2, 0)                     # 256 * 256 * 1
-    mask = mask[0, :, :, :].data.cpu().numpy().transpose(1, 2, 0)                               # 256 * 256 * 1
-    out = out[0, :, :, :].data.cpu().numpy().transpose(1, 2, 0)                                 # 256 * 256 * 1
-    # process
-    masked_img = grayscale * (1 - mask) + mask                                                  # 256 * 256 * 1
-    masked_img = np.concatenate((masked_img, masked_img, masked_img), axis = 2)                 # 256 * 256 * 3 (√)
-    masked_img = (masked_img * 255).astype(np.uint8)
-    grayscale = np.concatenate((grayscale, grayscale, grayscale), axis = 2)                     # 256 * 256 * 3 (√)
-    grayscale = (grayscale * 255).astype(np.uint8)
-    mask = np.concatenate((mask, mask, mask), axis = 2)                                         # 256 * 256 * 3 (√)
-    mask = (mask * 255).astype(np.uint8)
-    out = np.concatenate((out, out, out), axis = 2)                                             # 256 * 256 * 3 (√)
-    out = (out * 255).astype(np.uint8)
-    # save
-    img = np.concatenate((grayscale, mask, masked_img, out), axis = 1)
-    imgname = os.path.join(save_folder, str(epoch) + '.png')
+    grayscale = grayscale[0, :, :, :].data.cpu().numpy()
+    mask = mask[0, :, :, :].data.cpu().numpy()
+    out = out[0, :, :, :].data.cpu().numpy()
+
+    def _to_vis(arr: np.ndarray, repeat_channels: bool = True) -> np.ndarray:
+        if arr.ndim == 3 and arr.shape[0] in (1, 3):
+            arr = np.transpose(arr, (1, 2, 0))
+        elif arr.ndim == 2:
+            arr = arr[:, :, None]
+        if arr.shape[2] == 1 and repeat_channels:
+            arr = np.repeat(arr, 3, axis=2)
+        arr = np.clip(arr, 0.0, 1.0)
+        return (arr * 255).astype(np.uint8)
+
+    masked_img = grayscale * (1 - mask) + mask
+    grayscale_vis = _to_vis(grayscale)
+    mask_vis = _to_vis(mask)
+    masked_vis = _to_vis(masked_img)
+    out_vis = _to_vis(out)
+
+    img = np.concatenate((grayscale_vis, mask_vis, masked_vis, out_vis), axis=1)
+    os.makedirs(save_folder, exist_ok=True)
+    imgname = os.path.join(save_folder, f"{epoch}.png")
     cv2.imwrite(imgname, img)
+
+
+def sample_triplet(blocked, mask, recon, origin, save_folder, epoch, prefix='val'):
+    """Save visualization grid for bubble dataset triplets."""
+
+    blocked = blocked[0].numpy()
+    mask = mask[0].numpy()
+    recon = recon[0].numpy()
+    origin = origin[0].numpy()
+
+    def _prepare(arr: np.ndarray, is_mask: bool = False) -> np.ndarray:
+        if arr.ndim == 3 and arr.shape[0] in (1, 3):
+            arr = np.transpose(arr, (1, 2, 0))
+        elif arr.ndim == 2:
+            arr = arr[:, :, None]
+        if arr.shape[2] == 1:
+            arr = np.repeat(arr, 3, axis=2)
+        arr = np.clip(arr, 0.0, 1.0)
+        if is_mask:
+            return (arr * 255).astype(np.uint8)
+        return (arr * 255).astype(np.uint8)
+
+    blocked_vis = _prepare(blocked)
+    mask_vis = _prepare(mask, is_mask=True)
+    recon_vis = _prepare(recon)
+    origin_vis = _prepare(origin)
+
+    grid = np.concatenate((blocked_vis, mask_vis, recon_vis, origin_vis), axis=1)
+
+    save_dir = Path(save_folder)
+    save_dir.mkdir(parents=True, exist_ok=True)
+    filename = save_dir / f"{prefix}_{epoch}.png"
+    cv2.imwrite(str(filename), grid)
     
 def psnr(pred, target, pixel_max_cnt = 255):
     mse = torch.mul(target - pred, target - pred)
