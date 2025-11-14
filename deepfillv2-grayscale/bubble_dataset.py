@@ -13,6 +13,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+import functools
 
 import cv2
 import numpy as np
@@ -22,6 +23,18 @@ from torch.utils.data import Dataset
 LOGGER = logging.getLogger(__name__)
 
 _SUPPORTED_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
+
+# Simple LRU cache for frequently accessed images
+@functools.lru_cache(maxsize=1000)
+def _load_cached_image(path: str, imgsize: int) -> np.ndarray:
+    """Load and cache image with resizing."""
+    img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise RuntimeError(f"Failed to read image: {path}")
+    
+    if img.shape[0] == imgsize and img.shape[1] == imgsize:
+        return img
+    return cv2.resize(img, (imgsize, imgsize), interpolation=cv2.INTER_AREA)
 
 
 @dataclass(frozen=True)
@@ -175,19 +188,16 @@ class BubbleInpaintDataset(Dataset):
     def __len__(self) -> int:
         return len(self._samples)
 
-    def __getitem__(self, index: int):
+    def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[str]]:
         sample = self._samples[index]
 
-        blocked = cv2.imread(str(sample.blocked_path), cv2.IMREAD_GRAYSCALE)
-        mask = cv2.imread(str(sample.mask_path), cv2.IMREAD_GRAYSCALE)
-        origin = cv2.imread(str(sample.origin_path), cv2.IMREAD_GRAYSCALE)
+        # Use cached image loading for better performance
+        blocked = _load_cached_image(str(sample.blocked_path), self.imgsize)
+        mask = _load_cached_image(str(sample.mask_path), self.imgsize)
+        origin = _load_cached_image(str(sample.origin_path), self.imgsize)
 
         if blocked is None or mask is None or origin is None:
             raise RuntimeError(f"Failed to read triplet: {sample}")
-
-        blocked = self._resize_if_needed(blocked)
-        mask = self._resize_if_needed(mask)
-        origin = self._resize_if_needed(origin)
 
         blocked_norm = blocked.astype(np.float32) / 255.0
         origin_norm = origin.astype(np.float32) / 255.0

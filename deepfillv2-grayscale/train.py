@@ -12,7 +12,7 @@ if __name__ == "__main__":
     parser.add_argument('--save_path', type = str, default = '/home/yubd/mount/codebase/deepfillv2/deepfillv2-grayscale/models', help = 'saving path that is a folder')
     parser.add_argument('--sample_path', type = str, default = '/home/yubd/mount/codebase/deepfillv2/deepfillv2-grayscale/samples', help = 'training samples path that is a folder')
     parser.add_argument('--multi_gpu', type = bool, default = True, help = 'nn.Parallel needs or not')
-    parser.add_argument('--gpu_ids', type = str, default = "1,2,3", help = 'gpu ids: e.g. 0  0,1,2, 0,2. use -1 for CPU')
+    parser.add_argument('--gpu_ids', type = str, default = "2,3", help = 'gpu ids: e.g. 0  0,1,2, 0,2. use -1 for CPU')
     parser.add_argument('--cudnn_benchmark', type = bool, default = True, help = 'True for unchanged input data type')
     parser.add_argument('--checkpoint_interval', type = int, default = 5, help = 'interval between model checkpoints')
     parser.add_argument('--eval_interval', type = int, default = 5, help = 'interval between evaluations (epochs)')

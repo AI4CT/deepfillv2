@@ -5,7 +5,7 @@ import numpy as np
 import cv2
 
 import utils
-import dataset
+from bubble_dataset import BubbleInpaintDataset
 
 if __name__ == "__main__":
     # ----------------------------------------
@@ -28,36 +28,33 @@ if __name__ == "__main__":
     parser.add_argument('--pad', type = str, default = 'reflect', help = 'the padding type')
     parser.add_argument('--activ_g', type = str, default = 'lrelu', help = 'the activation type')
     parser.add_argument('--activ_d', type = str, default = 'lrelu', help = 'the activation type')
-    parser.add_argument('--norm_g', type = str, default = 'in', help = 'normalization type')
-    parser.add_argument('--norm_d', type = str, default = 'bn', help = 'normalization type')
+    parser.add_argument('--norm_g', type = str, default = 'in', help = 'the normalization type of generator')
+    parser.add_argument('--norm_d', type = str, default = 'bn', help = 'the normalization type of discriminator')
     parser.add_argument('--init_type', type = str, default = 'normal', help = 'the initialization type')
     parser.add_argument('--init_gain', type = float, default = 0.02, help = 'the initialization gain')
-    # Dataset parameters
-    parser.add_argument('--baseroot', type = str, \
-        default = "C:\\Users\\yzzha\\Desktop\\dataset\\ILSVRC2012_val_256", \
-            help = 'the base training folder for inpainting network')
+    # Dataset parameters for bubble mode
     parser.add_argument('--imgsize', type = int, default = 128, help = 'size of image')
-    # mask parameters
-    parser.add_argument('--mask_type', type = str, default = 'free_form', help = 'mask type')
-    parser.add_argument('--margin', type = int, default = 10, help = 'margin of image')
-    parser.add_argument('--mask_num', type = int, default = 15, help = 'number of mask')
-    parser.add_argument('--bbox_shape', type = int, default = 30, help = 'margin of image for bbox mask')
-    parser.add_argument('--max_angle', type = int, default = 4, help = 'parameter of angle for free form mask')
-    parser.add_argument('--max_len', type = int, default = 40, help = 'parameter of length for free form mask')
-    parser.add_argument('--max_width', type = int, default = 10, help = 'parameter of width for free form mask')
+    parser.add_argument('--dataset_mode', type = str, default = 'bubble', help = 'dataset pipeline to use')
+    parser.add_argument('--test_root', type = str, required = True, help = 'root directory for test triplets')
+    
     opt = parser.parse_args()
+    print(opt)
 
     # ----------------------------------------
     #                   Test
     # ----------------------------------------
     # Initialize
     generator = utils.create_generator(opt).cuda()
-    test_dataset = dataset.InpaintDataset_val(opt)
+    
+    # Use bubble dataset for validation
+    test_dataset = BubbleInpaintDataset(opt.test_root, opt, phase='test', return_paths=True, strict=False)
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size = opt.test_batch_size, shuffle = False, num_workers = opt.num_workers, pin_memory = True)
     utils.check_path(opt.val_path)
 
+    print(f'Loaded {len(test_dataset)} test samples')
+
     # forward
-    for i, (grayscale, mask, imgname) in enumerate(test_loader):
+    for i, (grayscale, mask, origin, imgname) in enumerate(test_loader):
 
         # To device
         grayscale = grayscale.cuda()                                        # out: [B, 1, 256, 256]
@@ -67,11 +64,15 @@ if __name__ == "__main__":
         # Forward propagation
         with torch.no_grad():
             fake_target = generator(grayscale, mask)                        # out: [B, 1, 256, 256]
+            out_whole = grayscale * (1 - mask) + fake_target * mask
 
-        # Save
-        fake_target = fake_target.clone().data.permute(0, 2, 3, 1)[0, :, :, :].cpu().numpy()
-        fake_target = (fake_target * 255.0).astype(np.uint8)
-        fake_target = cv2.cvtColor(fake_target, cv2.COLOR_BGR2RGB)
-        save_img_path = os.path.join(opt.val_path, imgname[0])
-        cv2.imwrite(imgname[0], fake_target)
+        # Save the repaired image
+        fake_target_np = out_whole.clone().data.permute(0, 2, 3, 1)[0, :, :, :].cpu().numpy()
+        fake_target_np = (fake_target_np * 255.0).astype(np.uint8)
+        fake_target_np = np.squeeze(fake_target_np)  # Remove channel dimension for grayscale
         
+        # Extract original filename from path
+        original_name = os.path.basename(imgname[0]).replace('_blocked', '_repaired')
+        save_img_path = os.path.join(opt.val_path, original_name)
+        cv2.imwrite(save_img_path, fake_target_np)
+        print(f"Saved repaired image to: {save_img_path}")

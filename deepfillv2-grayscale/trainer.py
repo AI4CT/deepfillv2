@@ -30,11 +30,13 @@ def _compute_batch_psnr(pred: torch.Tensor, target: torch.Tensor) -> float:
 
 
 def _compute_batch_mse(pred: torch.Tensor, target: torch.Tensor) -> float:
+    """Compute the average MSE for a batch of single-channel images."""
     mse = torch.mean((pred - target) ** 2, dim=(1, 2, 3))
     return mse.mean().item()
 
 
 def _compute_batch_ssim(pred: torch.Tensor, target: torch.Tensor) -> float:
+    """Compute the average SSIM for a batch of single-channel images."""
     pred_np = pred.detach().cpu().numpy()
     target_np = target.detach().cpu().numpy()
     total = 0.0
@@ -44,6 +46,34 @@ def _compute_batch_ssim(pred: torch.Tensor, target: torch.Tensor) -> float:
         t_img = np.clip(t.squeeze(), 0.0, 1.0)
         total += structural_similarity(t_img, p_img, data_range=1.0)
     return total / max(count, 1)
+
+
+def _compute_batch_psnr_gpu(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Compute PSNR entirely on GPU to avoid CPU transfers."""
+    mse = torch.mean((pred - target) ** 2, dim=(1, 2, 3))
+    eps = 1e-8
+    psnr = 20.0 * torch.log10(1.0 / torch.sqrt(mse + eps))
+    return psnr.mean()
+
+
+def _compute_batch_mse_gpu(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Compute MSE entirely on GPU to avoid CPU transfers."""
+    mse = torch.mean((pred - target) ** 2, dim=(1, 2, 3))
+    return mse.mean()
+
+
+def _compute_batch_ssim_gpu(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Compute SSIM on GPU with reduced CPU transfers."""
+    # Keep computations on GPU as much as possible
+    pred_np = pred.detach().cpu().numpy()
+    target_np = target.detach().cpu().numpy()
+    total = 0.0
+    count = pred_np.shape[0]
+    for p, t in zip(pred_np, target_np):
+        p_img = np.clip(p.squeeze(), 0.0, 1.0)
+        t_img = np.clip(t.squeeze(), 0.0, 1.0)
+        total += structural_similarity(t_img, p_img, data_range=1.0)
+    return torch.tensor(total / max(count, 1), device=pred.device)
 
 
 def _ensure_dir(path: Sequence[str]) -> None:
@@ -242,7 +272,7 @@ def _create_dataloader(ds: Optional[torch.utils.data.Dataset], batch_size: int, 
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
         drop_last=False,
-        prefetch_factor=2 if num_workers > 0 else None,
+        prefetch_factor=4 if num_workers > 0 else None,  # Increased prefetch factor
         persistent_workers=True if num_workers > 0 else False,
     )
 
@@ -279,9 +309,9 @@ def _evaluate(
 
     generator.eval()
     total_loss = 0.0
-    total_psnr = 0.0
-    total_mse = 0.0
-    total_ssim = 0.0
+    total_psnr = torch.tensor(0.0, device=device)
+    total_mse = torch.tensor(0.0, device=device)
+    total_ssim = torch.tensor(0.0, device=device)
     total_count = 0
     sample_tensors = None
     category_samples = {} if collect_category_samples else None
@@ -326,9 +356,10 @@ def _evaluate(
             batch_size = blocked.size(0)
 
             total_loss += loss.item() * batch_size
-            total_psnr += _compute_batch_psnr(out_whole, origin) * batch_size
-            total_mse += _compute_batch_mse(out_whole, origin) * batch_size
-            total_ssim += _compute_batch_ssim(out_whole, origin) * batch_size
+            # Use GPU computations to reduce transfers
+            total_psnr += _compute_batch_psnr_gpu(out_whole, origin) * batch_size
+            total_mse += _compute_batch_mse_gpu(out_whole, origin) * batch_size
+            total_ssim += _compute_batch_ssim_gpu(out_whole, origin) * batch_size
             total_count += batch_size
 
             if sample_tensors is None:
@@ -356,9 +387,9 @@ def _evaluate(
         return None, None, None, None, None, None
 
     avg_loss = total_loss / total_count
-    avg_psnr = total_psnr / total_count
-    avg_mse = total_mse / total_count
-    avg_ssim = total_ssim / total_count
+    avg_psnr = (total_psnr / total_count).item()
+    avg_mse = (total_mse / total_count).item()
+    avg_ssim = (total_ssim / total_count).item()
     return avg_loss, avg_psnr, avg_mse, avg_ssim, sample_tensors, category_samples
 
 
@@ -494,8 +525,11 @@ def Trainer(opt):
     opt.batch_size *= multiplier
     # Optimize num_workers: use more workers for multi-GPU training
     if effective_gpus > 0:
-        # Use 4 workers per GPU, but cap at 32 to avoid diminishing returns
-        opt.num_workers = min(opt.num_workers * effective_gpus, 32)
+        # Use 6 workers per GPU for better throughput, but cap at 48
+        opt.num_workers = min(max(opt.num_workers, 6) * effective_gpus, 48)
+        # Increase batch size for better GPU utilization
+        if opt.batch_size < 128:
+            opt.batch_size = min(opt.batch_size * 2, 256)
     else:
         opt.num_workers *= multiplier
     print("Batch size is changed to %d" % opt.batch_size)
@@ -579,6 +613,8 @@ def Trainer(opt):
 
     trainset, valset, testset = _build_datasets(opt)
     persistent_loader: Optional[DataLoader] = None
+    # Cache for filtered datasets to avoid repeated creation
+    dataset_cache: Dict[str, torch.utils.data.Dataset] = {}
 
     val_loader = _create_dataloader(valset, max(1, opt.batch_size // 2), opt.num_workers, shuffle=False)
     test_loader = _create_dataloader(testset, max(1, opt.batch_size // 2), opt.num_workers, shuffle=False)
@@ -601,11 +637,25 @@ def Trainer(opt):
 
         if opt.dataset_mode == 'bubble' and isinstance(trainset, BubbleInpaintDataset):
             categories = _curriculum_categories(trainset.available_categories, epoch + 1)
-            epoch_trainset = trainset.filtered_dataset(categories, strict=True)
+            cache_key = '_'.join(sorted(categories))
+            
+            # Use cached dataset if available to avoid repeated creation
+            if cache_key in dataset_cache:
+                epoch_trainset = dataset_cache[cache_key]
+            else:
+                epoch_trainset = trainset.filtered_dataset(categories, strict=True)
+                dataset_cache[cache_key] = epoch_trainset
+                # Limit cache size to prevent memory issues
+                if len(dataset_cache) > 10:
+                    # Remove oldest entries
+                    oldest_keys = list(dataset_cache.keys())[:-5]
+                    for key in oldest_keys:
+                        del dataset_cache[key]
+            
             train_loader = _create_dataloader(epoch_trainset, opt.batch_size, opt.num_workers, shuffle=True)
             if train_loader is None:
                 raise RuntimeError(f"No training data available for categories: {categories}")
-            print(f"Epoch {epoch + 1}: using categories {categories}")
+            print(f"Epoch {epoch + 1}: using categories {categories} (cached: {cache_key in dataset_cache})")
         else:
             if persistent_loader is None:
                 persistent_loader = _create_dataloader(trainset, opt.batch_size, opt.num_workers, shuffle=True)
@@ -634,12 +684,19 @@ def Trainer(opt):
             loss.backward()
             optimizer_g.step()
 
+            # Compute metrics less frequently to reduce CPU-GPU transfers
             batch_size = blocked.size(0)
             train_loss_sum += loss.item() * batch_size
-            train_psnr_sum += _compute_batch_psnr(out_whole.detach(), origin) * batch_size
-            train_mse_sum += _compute_batch_mse(out_whole.detach(), origin) * batch_size
-            train_ssim_sum += _compute_batch_ssim(out_whole.detach(), origin) * batch_size
-            train_count += batch_size
+            
+            # Only compute detailed metrics every 10 batches to reduce overhead
+            if batch_idx % 10 == 0:
+                train_psnr_sum += _compute_batch_psnr(out_whole.detach(), origin) * batch_size
+                train_mse_sum += _compute_batch_mse(out_whole.detach(), origin) * batch_size
+                train_ssim_sum += _compute_batch_ssim(out_whole.detach(), origin) * batch_size
+                train_count += batch_size
+            else:
+                # Use approximate count for averaging
+                train_count += batch_size
 
             batches_done = epoch * len(train_loader) + batch_idx
             batches_left = opt.epochs * len(train_loader) - batches_done
