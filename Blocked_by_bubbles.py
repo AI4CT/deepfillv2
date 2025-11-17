@@ -203,10 +203,26 @@ class PerformanceMonitor:
         self.processed_count += 1
 
 # ==================== 核心处理函数 ====================
-def create_directory_structure(base_path):
+def generate_occlusion_intervals(num_intervals: int) -> List[str]:
+    """生成遮挡程度区间列表"""
+    if num_intervals <= 0:
+        return []
+    
+    # 计算每个区间的大小
+    interval_size = 100 // num_intervals
+    intervals = []
+    
+    for i in range(num_intervals):
+        start = i * interval_size
+        end = (i + 1) * interval_size if i < num_intervals - 1 else 100
+        
+        intervals.append(f"{start}-{end}")
+    
+    return intervals
+
+def create_directory_structure(base_path, num_intervals=10):
     """创建分层目录结构（按遮挡比例命名）"""
-    categories = ['0-10', '10-20', '20-30', '30-40', '40-50', 
-                  '50-60', '60-70', '70-80', '80-90', '90-100']
+    categories = generate_occlusion_intervals(num_intervals)
     subdirs = ['Origin', 'Blocked', 'Segmented', 'Mask']
     
     if not os.path.exists(base_path):
@@ -235,49 +251,62 @@ def calculate_contour_area(contour):
     """计算轮廓面积"""
     return cv2.contourArea(contour)
 
-def get_category_from_occlusion(occlusion_ratio):
+def get_category_from_occlusion(occlusion_ratio, num_intervals=10):
     """根据遮挡率确定分类目录（遮挡率 = 1 - 可见率）"""
     occlusion_percentage = occlusion_ratio * 100
+    categories = generate_occlusion_intervals(num_intervals)
     
-    if occlusion_percentage <= 10:
-        return '0-10'
-    elif occlusion_percentage <= 20:
-        return '10-20'
-    elif occlusion_percentage <= 30:
-        return '20-30'
-    elif occlusion_percentage <= 40:
-        return '30-40'
-    elif occlusion_percentage <= 50:
-        return '40-50'
-    elif occlusion_percentage <= 60:
-        return '50-60'
-    elif occlusion_percentage <= 70:
-        return '60-70'
-    elif occlusion_percentage <= 80:
-        return '70-80'
-    elif occlusion_percentage <= 90:
-        return '80-90'
-    else:
-        return '90-100'
+    if not categories:
+        return '0-10'  # 默认返回
+    
+    interval_size = 100 // num_intervals
+    
+    for i, category in enumerate(categories):
+        start, end = map(int, category.split('-'))
+        
+        # 对于最后一个区间，包含100%
+        if i == num_intervals - 1:
+            if occlusion_percentage >= start and occlusion_percentage <= end:
+                return category
+        else:
+            if occlusion_percentage >= start and occlusion_percentage < end:
+                return category
+    
+    # 如果没有匹配到任何区间，返回最后一个区间
+    return categories[-1]
 
-def determine_occlusion_params(target_occlusion_range):
+def determine_occlusion_params(target_occlusion_range, num_intervals=10):
     """根据目标遮挡范围确定遮挡参数"""
-    if target_occlusion_range in ['0-10', '10-20']:
+    categories = generate_occlusion_intervals(num_intervals)
+    
+    # 计算区间索引
+    try:
+        interval_index = categories.index(target_occlusion_range)
+    except ValueError:
+        # 如果找不到目标区间，使用默认参数
+        return ([1, 2, 3, 4], (0.7, 1.2), (0.3, 1.0))
+    
+    # 根据区间索引动态分配参数
+    total_intervals = num_intervals
+    
+    if interval_index < total_intervals // 3:  # 低遮挡区间
         return ([1], (0.3, 0.6), (0.6, 1.2))
-    elif target_occlusion_range in ['20-30', '30-40']:
+    elif interval_index < 2 * total_intervals // 3:  # 中等遮挡区间
         return ([1, 2], (0.5, 0.8), (0.5, 1.0))
-    elif target_occlusion_range in ['40-50', '50-60']:
+    elif interval_index < 5 * total_intervals // 6:  # 较高遮挡区间
         return ([2, 3], (0.7, 1.0), (0.4, 0.9))
-    elif target_occlusion_range in ['60-70', '70-80']:
-        return ([3, 4], (0.9, 1.2), (0.3, 0.8))
-    else:
-        return ([4, 5], (1.0, 1.3), (0.2, 0.7))
+    else:  # 高遮挡区间
+        return ([3, 4, 5], (0.9, 1.3), (0.2, 0.7))
 
 def process_bubble_with_target(bubble1_path, bubble_images, output_base_path,
-                               target_category=None, attempt_id=0):
+                               target_category=None, attempt_id=0, num_intervals=10, save_files=False):
     """
     处理单个气泡图像，生成四种输出
     新增功能：记录使用的遮挡气泡列表
+    新增参数：save_files 控制是否保存文件到磁盘
+    
+    Returns:
+        dict: 包含图像数据和元数据，如果save_files=True则保存文件并返回路径，否则返回图像数据
     """
     try:
         bubble1 = cv2.imread(bubble1_path)
@@ -285,13 +314,15 @@ def process_bubble_with_target(bubble1_path, bubble_images, output_base_path,
             return None
         
         original_contour = get_bubble_contour(bubble1)
-        original_area = calculate_contour_area(original_contour)
         
         original_mask = np.zeros(bubble1.shape[:2], np.uint8)
         cv2.drawContours(original_mask, [original_contour], 0, 255, -1)
         
+        # 统一计算方式：使用掩码计算原始面积，而不是轮廓面积
+        original_area = np.sum(original_mask > 0)
+        
         if target_category:
-            blocked_num_range, scale_range, shift_range = determine_occlusion_params(target_category)
+            blocked_num_range, scale_range, shift_range = determine_occlusion_params(target_category, num_intervals)
         else:
             blocked_num_range = [1, 2, 3, 4]
             scale_range = (0.7, 1.2)
@@ -371,27 +402,36 @@ def process_bubble_with_target(bubble1_path, bubble_images, output_base_path,
         visibility_ratio = visible_area / original_area if original_area > 0 else 0
         occlusion_ratio = 1.0 - visibility_ratio
         
+        # 检查occlusion_ratio是否为负数，如果是则跳过该数据
+        if occlusion_ratio < 0:
+            # logger.warning(f"跳过负数遮挡率数据 {bubble1_path}: occlusion_ratio={occlusion_ratio}")
+            return None
+        
         segmented_image = np.ones_like(bubble1) * 255
         visible_part = cv2.bitwise_and(bubble1, bubble1, mask=visible_mask)
         segmented_image[visible_mask > 0] = visible_part[visible_mask > 0]
         
         binary_mask = (visible_mask > 0).astype(np.uint8) * 255
         
-        category = get_category_from_occlusion(occlusion_ratio)
+        category = get_category_from_occlusion(occlusion_ratio, num_intervals)
         
-        # 新的文件命名策略：{原始气泡名}_{遮挡级别}_{图像类型}.png
+        # 新的文件命名策略：{原始气泡名}_{具体遮挡比例}_{图像类型}.png
         filename = os.path.splitext(os.path.basename(bubble1_path))[0]
-        unique_filename = f'{filename}_{category}'
+        occlusion_percentage = occlusion_ratio * 100
+        unique_filename = f'{filename}_{occlusion_percentage:.1f}'
         
+        # 生成文件路径
         origin_path = os.path.join(output_base_path, category, 'Origin', f'{unique_filename}_original.png')
         blocked_path = os.path.join(output_base_path, category, 'Blocked', f'{unique_filename}_blocked.png')
         segmented_path = os.path.join(output_base_path, category, 'Segmented', f'{unique_filename}_segmented.png')
         mask_path = os.path.join(output_base_path, category, 'Mask', f'{unique_filename}_mask.png')
         
-        cv2.imwrite(origin_path, bubble1, [cv2.IMWRITE_PNG_COMPRESSION, 9])
-        cv2.imwrite(blocked_path, blocked_image, [cv2.IMWRITE_PNG_COMPRESSION, 9])
-        cv2.imwrite(segmented_path, segmented_image, [cv2.IMWRITE_PNG_COMPRESSION, 9])
-        cv2.imwrite(mask_path, binary_mask, [cv2.IMWRITE_PNG_COMPRESSION, 9])
+        # 根据save_files参数决定是否保存文件
+        if save_files:
+            cv2.imwrite(origin_path, bubble1, [cv2.IMWRITE_PNG_COMPRESSION, 9])
+            cv2.imwrite(blocked_path, blocked_image, [cv2.IMWRITE_PNG_COMPRESSION, 9])
+            cv2.imwrite(segmented_path, segmented_image, [cv2.IMWRITE_PNG_COMPRESSION, 9])
+            cv2.imwrite(mask_path, binary_mask, [cv2.IMWRITE_PNG_COMPRESSION, 9])
         
         return {
             'filename': unique_filename,
@@ -405,7 +445,13 @@ def process_bubble_with_target(bubble1_path, bubble_images, output_base_path,
             'mask_path': mask_path,
             'occlusion_ratio': occlusion_ratio,
             'visibility_ratio': visibility_ratio,
-            'category': category
+            'category': category,
+            'images': {  # 新增：图像数据，用于后续保存
+                'bubble1': bubble1,
+                'blocked_image': blocked_image,
+                'segmented_image': segmented_image,
+                'binary_mask': binary_mask
+            }
         }
     except Exception as e:
         logger.error(f"处理气泡失败 {bubble1_path}: {e}")
@@ -416,7 +462,7 @@ def process_bubble_with_target(bubble1_path, bubble_images, output_base_path,
 def process_single_bubble(img_path: str, bubble_images: List[str],
                          output_base_path: str, checkpoint: CheckpointManager,
                          occlusion_categories: List[str], max_attempts: int = 200,
-                         max_samples_per_bubble: int = 10) -> Dict:
+                         max_samples_per_bubble: int = 10, num_intervals: int = 10) -> Dict:
     """
     处理单个气泡的所有遮挡级别
     新的采样策略：每个遮挡级别最多保存一张样本
@@ -457,7 +503,9 @@ def process_single_bubble(img_path: str, bubble_images: List[str],
                 bubble_images,
                 output_base_path,
                 target_category=None,
-                attempt_id=attempt_count
+                attempt_id=attempt_count,
+                num_intervals=num_intervals,
+                save_files=False  # 先不保存文件，等检查通过后再保存
             )
             
             if metadata:
@@ -465,7 +513,16 @@ def process_single_bubble(img_path: str, bubble_images: List[str],
                 
                 # 新策略：检查该级别是否已有样本
                 if not checkpoint.has_level_sample(bubble_name, category):
-                    # 该级别还没有样本，保存此样本
+                    # 该级别还没有样本，保存此样本的图像文件
+                    images = metadata['images']
+                    cv2.imwrite(metadata['origin_path'], images['bubble1'], [cv2.IMWRITE_PNG_COMPRESSION, 9])
+                    cv2.imwrite(metadata['blocked_path'], images['blocked_image'], [cv2.IMWRITE_PNG_COMPRESSION, 9])
+                    cv2.imwrite(metadata['segmented_path'], images['segmented_image'], [cv2.IMWRITE_PNG_COMPRESSION, 9])
+                    cv2.imwrite(metadata['mask_path'], images['binary_mask'], [cv2.IMWRITE_PNG_COMPRESSION, 9])
+                    
+                    # 从metadata中移除图像数据（节省内存）
+                    metadata.pop('images', None)
+                    
                     completed_levels.add(category)
                     newly_completed.append(category)
                     checkpoint.add_completed_level(bubble_name, category)
@@ -505,7 +562,7 @@ def process_single_bubble(img_path: str, bubble_images: List[str],
         'status': status
     }
 
-def generate_statistics_and_visualization(metadata_list, output_base_path, checkpoint: CheckpointManager = None):
+def generate_statistics_and_visualization(metadata_list, output_base_path, checkpoint: CheckpointManager = None, num_intervals: int = 10):
     """
     生成数据集统计和可视化
     新增：按气泡统计的分布图表
@@ -519,14 +576,15 @@ def generate_statistics_and_visualization(metadata_list, output_base_path, check
     plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
     plt.rcParams['axes.unicode_minus'] = False
     
+    # 生成动态类别列表
+    categories = generate_occlusion_intervals(num_intervals)
+    
     # 创建更大的图表（增加一行用于气泡统计）
     fig, axes = plt.subplots(3, 2, figsize=(15, 18))
     fig.suptitle('Dataset Statistical Analysis', fontsize=16, fontweight='bold')
     
     # 1. 样本数分布
     category_counts = df['category'].value_counts().sort_index()
-    categories = ['0-10', '10-20', '20-30', '30-40', '40-50', 
-                  '50-60', '60-70', '70-80', '80-90', '90-100']
     counts = [category_counts.get(cat, 0) for cat in categories]
     
     axes[0, 0].bar(categories, counts, color='skyblue', edgecolor='navy')
@@ -609,8 +667,6 @@ def generate_statistics_and_visualization(metadata_list, output_base_path, check
         if bubble_level_data:
             # 选择前20个气泡
             bubble_names = sorted(bubble_level_data.keys())[:20]
-            categories = ['0-10', '10-20', '20-30', '30-40', '40-50',
-                          '50-60', '60-70', '70-80', '80-90', '90-100']
             
             heatmap_data = []
             for bubble in bubble_names:
@@ -651,7 +707,7 @@ def save_failed_tasks_log(output_base_path: str):
     console.print(f"[yellow]失败任务日志已保存至: {log_path}[/yellow]")
 
 def generate_validation_report(metadata_list: List[Dict], checkpoint: CheckpointManager, 
-                               output_base_path: str, max_samples_per_bubble: int):
+                               output_base_path: str, max_samples_per_bubble: int, num_intervals: int = 10):
     """
     生成数据验证报告
     
@@ -668,7 +724,8 @@ def generate_validation_report(metadata_list: List[Dict], checkpoint: Checkpoint
         f.write("="*80 + "\n\n")
         f.write(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"总样本数: {len(metadata_list)}\n")
-        f.write(f"每气泡最大样本数限制: {max_samples_per_bubble}\n\n")
+        f.write(f"每气泡最大样本数限制: {max_samples_per_bubble}\n")
+        f.write(f"遮挡区间数量: {num_intervals}\n\n")
         
         # 验证1：检查每个气泡的样本数
         f.write("-"*80 + "\n")
@@ -724,8 +781,7 @@ def generate_validation_report(metadata_list: List[Dict], checkpoint: Checkpoint
         f.write("气泡样本详细分布\n")
         f.write("-"*80 + "\n\n")
         
-        categories = ['0-10', '10-20', '20-30', '30-40', '40-50', 
-                     '50-60', '60-70', '70-80', '80-90', '90-100']
+        categories = generate_occlusion_intervals(num_intervals)
         
         for bubble_name in sorted(bubble_sample_counts.keys()):
             level_dist = bubble_sample_counts[bubble_name]
@@ -767,13 +823,13 @@ def main():
                        help='输入图像路径（支持通配符）')
     parser.add_argument('--output', type=str,
                     #    default='C:/DataSet_DOOR/dataset_overlap/training_dataset',
-                       default='/home/yubd/mount/dataset/dataset_overlap/training_dataset',
+                       default='/home/yubd/mount/dataset/dataset_overlap/test20251117',
                        help='输出目录路径')
     parser.add_argument('--workers', type=int, default=0,
                        help='工作线程数（0=自动，根据CPU核心数）')
-    parser.add_argument('--max-attempts', type=int, default=250,
+    parser.add_argument('--max-attempts', type=int, default=500,
                        help='每个气泡的最大尝试次数')
-    parser.add_argument('--limit', type=int, default=0,
+    parser.add_argument('--limit', type=int, default=10,
                        help='处理的气泡图像数量限制（0=不限制）')
     parser.add_argument('--resume', action='store_true',
                        help='从上次中断点恢复')
@@ -782,7 +838,7 @@ def main():
     parser.add_argument('--show-performance', action='store_true',
                        help='显示性能监控信息')
     parser.add_argument('--max-samples-per-bubble', type=int, default=10,
-                       help='每个气泡最多产生的样本数（默认10，即每级别1张）')
+                       help='遮挡程度区间数量（默认10，即1-10,10-20...90-100十个区间）')
     
     args = parser.parse_args()
     
@@ -806,7 +862,7 @@ def main():
     ))
     
     # 创建输出目录
-    create_directory_structure(args.output)
+    create_directory_structure(args.output, args.max_samples_per_bubble)
     
     # 初始化检查点管理器
     checkpoint = CheckpointManager(os.path.join(args.output, 'checkpoint.json'))
@@ -833,9 +889,8 @@ def main():
     
     console.print(f"\n[bold]找到 {len(bubble_images)} 个待处理的气泡图像[/bold]\n")
     
-    # 遮挡级别
-    occlusion_categories = ['0-10', '10-20', '20-30', '30-40', '40-50',
-                           '50-60', '60-70', '70-80', '80-90', '90-100']
+    # 遮挡级别（动态生成）
+    occlusion_categories = generate_occlusion_intervals(args.max_samples_per_bubble)
     
     # 性能监控
     perf_monitor = PerformanceMonitor()
@@ -894,7 +949,8 @@ def main():
                         checkpoint,
                         occlusion_categories,
                         args.max_attempts,
-                        args.max_samples_per_bubble
+                        args.max_samples_per_bubble,
+                        args.max_samples_per_bubble  # num_intervals参数
                     ): img_path
                     for img_path in bubble_images
                 }
@@ -1036,7 +1092,7 @@ def main():
         # 生成统计图表
         if checkpoint.data['metadata_list']:
             console.print("\n[cyan]正在生成统计图表...[/cyan]")
-            generate_statistics_and_visualization(checkpoint.data['metadata_list'], args.output, checkpoint)
+            generate_statistics_and_visualization(checkpoint.data['metadata_list'], args.output, checkpoint, args.max_samples_per_bubble)
         
         # 生成验证报告
         console.print("\n[cyan]正在生成验证报告...[/cyan]")
@@ -1044,6 +1100,7 @@ def main():
             checkpoint.data['metadata_list'],
             checkpoint,
             args.output,
+            args.max_samples_per_bubble,
             args.max_samples_per_bubble
         )
         

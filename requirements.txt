@@ -1,0 +1,15 @@
+# DeepFill v2 Grayscale Inpainting Project - Basic Requirements
+
+# Deep Learning Framework
+torch>=1.10.0
+torchvision>=0.11.0
+
+# Image Processing
+opencv-python>=4.5.0
+scikit-image>=0.18.0
+
+# Numerical Computing
+numpy>=1.19.0
+
+# Visualization
+matplotlib>=3.3.0
