@@ -37,7 +37,7 @@ def create_discriminator(opt):
 
 def create_perceptualnet():
     # Pre-trained VGG-16
-    vgg16 = torch.load('/home/yubd/mount/codebase/deepfillv2/deepfillv2-grayscale/models/vgg16-397923af.pth', weights_only=True)
+    vgg16 = torch.load('/home/yubd/mount/codebase/deepfillv2/models/vgg16-397923af.pth', weights_only=True)
     # Get the first 16 layers of vgg16, which is conv3_3
     perceptualnet = network.PerceptualNet()
     # Update the parameters

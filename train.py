@@ -9,8 +9,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # General parameters
     parser.add_argument('--pre_train', type = bool, default = False, help = 'the type of GAN for training')
-    parser.add_argument('--save_path', type = str, default = '/home/yubd/mount/codebase/deepfillv2/deepfillv2-grayscale/models', help = 'saving path that is a folder')
-    parser.add_argument('--sample_path', type = str, default = '/home/yubd/mount/codebase/deepfillv2/deepfillv2-grayscale/samples', help = 'training samples path that is a folder')
+    parser.add_argument('--save_path', type = str, default = '/home/yubd/mount/codebase/deepfillv2/models', help = 'saving path that is a folder')
+    parser.add_argument('--sample_path', type = str, default = '/home/yubd/mount/codebase/deepfillv2/samples', help = 'training samples path that is a folder')
     parser.add_argument('--multi_gpu', type = bool, default = True, help = 'nn.Parallel needs or not')
     parser.add_argument('--gpu_ids', type = str, default = "2,3", help = 'gpu ids: e.g. 0  0,1,2, 0,2. use -1 for CPU')
     parser.add_argument('--cudnn_benchmark', type = bool, default = True, help = 'True for unchanged input data type')
@@ -18,7 +18,7 @@ if __name__ == "__main__":
     parser.add_argument('--eval_interval', type = int, default = 5, help = 'interval between evaluations (epochs)')
     parser.add_argument('--eval_match_curriculum', type = bool, default = True, help = 'whether to evaluate on the same curriculum categories as training when using bubble dataset')
     parser.add_argument('--finetune_path', type = str, default = "", help = 'the load name of models')
-    parser.add_argument('--resume_path', type = str, default = "/home/yubd/mount/codebase/deepfillv2/deepfillv2-grayscale/models/20251113_190705/BUDDY_epoch90_batchsize288.pth", help = 'path to checkpoint for resume training')
+    parser.add_argument('--resume_path', type = str, default = "/home/yubd/mount/codebase/deepfillv2/models/20251116_194359/BUDDY_GAN_full_checkpoint_epoch10_batchsize96.pth", help = 'path to checkpoint for resume training')
     parser.add_argument('--resume_training', type = bool, default = True, help = 'whether to resume training from checkpoint')
     # Training parameters
     parser.add_argument('--epochs', type = int, default = 200, help = 'number of epochs of training')
@@ -58,11 +58,11 @@ if __name__ == "__main__":
         help = 'root directory for validation triplets when dataset_mode == bubble')
     parser.add_argument('--test_root', type = str, default = '/home/yubd/mount/dataset/dataset_overlap/test',
         help = 'root directory for test triplets when dataset_mode == bubble')
-    parser.add_argument('--metrics_log', type = str, default = '/home/yubd/mount/codebase/deepfillv2/deepfillv2-grayscale/logs/metrics_log.csv',
+    parser.add_argument('--metrics_log', type = str, default = '/home/yubd/mount/codebase/deepfillv2/logs/metrics_log.csv',
         help = 'path to save training/validation metrics log')
-    parser.add_argument('--metrics_plot', type = str, default = '/home/yubd/mount/codebase/deepfillv2/deepfillv2-grayscale/logs/metrics_curve.png',
+    parser.add_argument('--metrics_plot', type = str, default = '/home/yubd/mount/codebase/deepfillv2/logs/metrics_curve.png',
         help = 'path to save training/validation metrics visualization')
-    parser.add_argument('--samples_path', type = str, default = '/home/yubd/mount/codebase/deepfillv2/deepfillv2-grayscale/samples',
+    parser.add_argument('--samples_path', type = str, default = '/home/yubd/mount/codebase/deepfillv2/samples',
         help = 'path to save sampled visualizations (override sample_path when provided)')
     # mask parameters (only used when dataset_mode == default)
     parser.add_argument('--mask_type', type = str, default = 'free_form', help = 'mask type')
